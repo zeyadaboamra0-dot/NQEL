@@ -1,0 +1,251 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== المستخدمون ====================
+
+model Admin {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  name         String
+  active       Boolean  @default(true)
+  sessionVersion Int    @default(0) // يزيد عند تغيير كلمة المرور لإبطال الجلسات القديمة
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Representative {
+  id                Int            @id @default(autoincrement())
+  code              String         @unique // كود الدخول
+  pinHash           String // PIN مشفر
+  sessionVersion    Int            @default(0) // يزيد عند تغيير/تصفير PIN لإبطال الجلسات القديمة
+  name              String
+  phone             String?
+  governorate       String?
+  city              String?
+  vehicleType       String?
+  defaultCommission Float          @default(0)
+  active            Boolean        @default(true)
+  notes             String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  orders            Order[]
+  payouts           Payout[]
+  notifications     Notification[]
+}
+
+// ==================== العملاء ====================
+
+model Customer {
+  id          Int      @id @default(autoincrement())
+  name        String
+  phone       String   @unique
+  altPhone    String?
+  governorate String?
+  city        String?
+  address     String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  orders      Order[]
+}
+
+// ==================== الشحنات والطلبات ====================
+
+model ShipmentType {
+  id     Int     @id @default(autoincrement())
+  name   String  @unique
+  active Boolean @default(true)
+  orders Order[]
+}
+
+enum OrderStatus {
+  NEW // جديد - لم يُسند
+  ASSIGNED // مُسند - بانتظار قبول المندوب
+  ACCEPTED // تم استلام الطلب من الإدارة
+  ON_WAY_PICKUP // في الطريق إلى مكان الاستلام
+  PICKED_UP // تم استلام الشحنة
+  ON_WAY_DELIVERY // في الطريق إلى العميل
+  DELIVERED // تم التسليم بنجاح
+  FAILED // تعذر التسليم
+  NO_ANSWER // العميل لم يرد
+  REFUSED // العميل رفض الاستلام
+  POSTPONED // تأجيل التسليم
+  CANCELLED // ملغى بطلب من الإدارة
+}
+
+model Order {
+  id          Int      @id @default(autoincrement())
+  orderNumber String   @unique
+  customerId  Int
+  customer    Customer @relation(fields: [customerId], references: [id])
+
+  // بيانات التوصيل (snapshot وقت الإنشاء)
+  receiverName  String?
+  phone         String
+  altPhone      String?
+  governorate   String
+  city          String
+  addressDetail String
+  mapLink       String?
+  pickupPlace   String
+  deliveryPlace String
+
+  // الشحنة
+  shipmentTypeId Int
+  shipmentType   ShipmentType @relation(fields: [shipmentTypeId], references: [id])
+  shipmentDesc   String?
+  shipmentSize   String?
+
+  // المالية
+  collectionAmount    Float   @default(0) // قيمة التحصيل من العميل
+  deliveryFee         Float   @default(0) // أجرة التوصيل (إيراد NQEL)
+  shipmentCost        Float   @default(0) // تكلفة الشحنة على NQEL
+  additionalExpenses  Float   @default(0) // مصروفات إضافية على الطلب
+  repCommission       Float   @default(0) // مستحق المندوب
+  nqelRevenue         Float   @default(0) // الإيراد الفعلي لـ NQEL
+  netProfit           Float   @default(0) // صافي ربح الطلب
+  collectionCollected Boolean @default(false) // هل تم تحصيل المبلغ من العميل
+
+  // الحالة والمتابعة
+  status         OrderStatus     @default(NEW)
+  repId          Int?
+  rep            Representative? @relation(fields: [repId], references: [id])
+  attempts       Int             @default(0) // عدد محاولات التسليم
+  failureReason  String?
+  postponeReason String?
+  cancelReason   String?
+
+  // تأكيد التسليم
+  otpCode        String?
+  otpAttempts    Int       @default(0) // محاولات إدخال خاطئة للرمز
+  otpExpiresAt   DateTime? // صلاحية الرمز (تبدأ عند الخروج للتسليم)
+  receiverSigned String? // اسم المستلم
+  deliveryProof  String? // إثبات تسليم (وصف/مرجع)
+
+  notes          String? // ملاحظات الطلب
+
+  // التوقيتات
+  assignedAt         DateTime?
+  acceptedAt         DateTime?
+  onWayPickupAt      DateTime?
+  pickedUpAt         DateTime?
+  onWayDeliveryAt    DateTime?
+  deliveredAt        DateTime?
+  closedAt           DateTime?
+  expectedDeliveryAt DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  createdById       Int?
+  createdByName     String?
+  lastUpdatedById   Int?
+  lastUpdatedByName String?
+
+  statusHistory StatusHistory[]
+  notifications Notification[]
+}
+
+model StatusHistory {
+  id        Int         @id @default(autoincrement())
+  orderId   Int
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status    OrderStatus
+  note      String?
+  actorType String // ADMIN | REP | SYSTEM
+  actorId   Int?
+  actorName String
+  createdAt DateTime    @default(now())
+
+  @@index([orderId])
+}
+
+// ==================== المالية ====================
+
+model Expense {
+  id            Int      @id @default(autoincrement())
+  title         String
+  category      String   @default("عام")
+  amount        Float
+  expenseDate   DateTime
+  notes         String?
+  createdById   Int?
+  createdByName String?
+  createdAt     DateTime @default(now())
+}
+
+model Payout {
+  id            Int            @id @default(autoincrement())
+  repId         Int
+  rep           Representative @relation(fields: [repId], references: [id])
+  amount        Float
+  note          String?
+  payoutDate    DateTime
+  createdById   Int?
+  createdByName String?
+  createdAt     DateTime       @default(now())
+
+  @@index([repId])
+}
+
+// ==================== الإشعارات وسجل العمليات ====================
+
+model Notification {
+  id         Int             @id @default(autoincrement())
+  targetType String // ADMIN | REP
+  repId      Int?
+  rep        Representative? @relation(fields: [repId], references: [id], onDelete: Cascade)
+  type       String // ASSIGN | ACCEPT | DELIVERED | FAILED | LATE | ORDER_UPDATED | REASSIGN | PROBLEM | INFO
+  title      String
+  body       String
+  orderId    Int?
+  order      Order?          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  read       Boolean         @default(false)
+  createdAt  DateTime        @default(now())
+
+  @@index([targetType, repId, read])
+}
+
+model ActivityLog {
+  id          Int      @id @default(autoincrement())
+  actorType   String // ADMIN | REP | SYSTEM
+  actorId     Int?
+  actorName   String
+  action      String // CREATE | UPDATE | DELETE | ASSIGN | STATUS_CHANGE | LOGIN | ...
+  entityType  String // ORDER | REP | CUSTOMER | EXPENSE | PAYOUT | SETTINGS | AUTH
+  entityId    Int?
+  entityLabel String? // مثال: رقم الطلب أو اسم المندوب
+  details     String? // JSON: {field: {old, new}}
+  createdAt   DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// ==================== الإعدادات ====================
+
+model Settings {
+  id                  Int      @id @default(1)
+  platformName        String   @default("NQEL")
+  currency            String   @default("ج.م")
+  requireOtp          Boolean  @default(true) // إلزام رمز تأكيد التسليم
+  requireReceiverName Boolean  @default(true) // إلزام اسم المستلم
+  requireProof        Boolean  @default(false) // إلزام إثبات تسليم (وصف)
+  lateThresholdHours  Int      @default(0) // ساعات إضافية قبل اعتبار الطلب متأخرًا بعد الموعد
+  defaultCommission   Float    @default(0) // عمولة المندوب الافتراضية
+  updatedAt           DateTime @updatedAt
+}
+
+// ==================== حماية تسجيل الدخول (محدد معدّل مركزي) ====================
+
+model RateLimit {
+  key       String   @id
+  count     Int      @default(0)
+  resetAt   DateTime
+}
